@@ -142,6 +142,7 @@ var testTypeToTestConfig = map[string][]testConfig{
 		},
 		{testDir: "./test/otel_collect/linux/host_metrics"},
 		{testDir: "./test/otel_collect/linux/otlp"},
+		{testDir: "./test/otel_collect/linux/profiles"},
 		{
 			testDir:    "./test/otel_collect/linux/prometheus",
 			excludedOs: map[string]struct{}{"rhel8": {}, "ol8": {}, "sles-15": {}},
