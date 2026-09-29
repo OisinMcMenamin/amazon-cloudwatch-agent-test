@@ -588,6 +588,7 @@ var partitionTests = map[string]partition{
 			"./test/otel_collect/database_insights":  {},
 			"./test/otel_collect/linux/host_metrics": {},
 			"./test/otel_collect/linux/otlp":         {},
+			"./test/otel_collect/linux/profiles":     {},
 			"./test/otel_collect/linux/prometheus":   {},
 		},
 		testConfigOverrides: map[string]testConfig{
@@ -609,6 +610,7 @@ var partitionTests = map[string]partition{
 			"./test/otel_collect/database_insights":  {},
 			"./test/otel_collect/linux/host_metrics": {},
 			"./test/otel_collect/linux/otlp":         {},
+			"./test/otel_collect/linux/profiles":     {},
 			"./test/otel_collect/linux/prometheus":   {},
 		},
 		testConfigOverrides: map[string]testConfig{
