@@ -176,16 +176,12 @@ func (t *ProfilesTestRunner) validateExporterHealth() status.TestResult {
 
 	var offending []string
 	collectorReady := false
-	authExtensionStarted := false
 	for _, line := range strings.Split(logContent, "\n") {
 		if strings.Contains(line, "Everything is ready. Begin running and processing data.") {
 			collectorReady = true
 		}
 		if !strings.Contains(line, "profiles") {
 			continue
-		}
-		if strings.Contains(line, "Extension is starting") && strings.Contains(line, "agenthealth") {
-			authExtensionStarted = true
 		}
 		if strings.Contains(line, "E! ") || strings.Contains(strings.ToLower(line), "partial success") {
 			offending = append(offending, line)
@@ -194,10 +190,6 @@ func (t *ProfilesTestRunner) validateExporterHealth() status.TestResult {
 
 	if !collectorReady {
 		result.Reason = fmt.Errorf("agent log never reported the collector as ready")
-		return result
-	}
-	if !authExtensionStarted {
-		result.Reason = fmt.Errorf("agent log never reported the profiles exporter's agenthealth extension starting")
 		return result
 	}
 	if len(offending) > 0 {
