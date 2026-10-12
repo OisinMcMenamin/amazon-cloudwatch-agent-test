@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	otlpGRPCAddr = "127.0.0.1:4317"
+	otlpHTTPEndpoint   = "http://127.0.0.1:4318"
+	otlpGRPCAddr       = "127.0.0.1:4317"
+	profilesURLPath    = "/v1development/profiles"
+	profilesExporterID = "otlp_http/profiles"
 
 	profilesExportMethod = "/opentelemetry.proto.collector.profiles.v1development.ProfilesService/Export"
 
@@ -54,6 +57,19 @@ var profilesTransports = []profilesTransport{
 	{name: "grpc", serviceSuffix: "-grpc", send: func(service, instance string) error {
 		return exportProfilesGRPC(buildProfilesProto(service, instance))
 	}},
+}
+
+func postProfiles(payload []byte) error {
+	resp, err := http.Post(otlpHTTPEndpoint+profilesURLPath, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("POST %s failed: %w", profilesURLPath, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST %s returned %d: %s", profilesURLPath, resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 func postProfilesProto(payload []byte, compress bool) error {
