@@ -17,6 +17,8 @@ const (
 
 	profilesResourceProcessorID = "resource/profiles"
 
+	profilesIdentityProcessorID = "transform/identity"
+
 	serviceNameKey = "service.name"
 
 	fallbackServiceName = "unknown_service"
@@ -37,6 +39,14 @@ type pipelineConfig struct {
 
 type processorConfig struct {
 	Attributes []attributeAction `yaml:"attributes"`
+	// profile_statements on the transform processor. The agent renders it as a list of OTTL
+	// statement groups (one per context), not a flat list of statement strings.
+	ProfileStatements []statementGroup `yaml:"profile_statements"`
+}
+
+type statementGroup struct {
+	Context    string   `yaml:"context"`
+	Statements []string `yaml:"statements"`
 }
 
 type attributeAction struct {
@@ -48,6 +58,9 @@ type attributeAction struct {
 type profilesPipeline struct {
 	pipelineConfig
 	resourceActions []attributeAction
+	// identityProfileStatements are the OTTL profile statements on transform/identity, flattened
+	// across its statement groups. The nil-guarded unknown_service fallback lives here.
+	identityProfileStatements []string
 }
 
 func parseProfilesPipeline(content []byte) (profilesPipeline, error) {
@@ -60,9 +73,18 @@ func parseProfilesPipeline(content []byte) (profilesPipeline, error) {
 		return profilesPipeline{}, fmt.Errorf("translated config has no %s pipeline", profilesPipelineID)
 	}
 	return profilesPipeline{
-		pipelineConfig:  pipeline,
-		resourceActions: cfg.Processors[profilesResourceProcessorID].Attributes,
+		pipelineConfig:            pipeline,
+		resourceActions:           cfg.Processors[profilesResourceProcessorID].Attributes,
+		identityProfileStatements: flattenStatements(cfg.Processors[profilesIdentityProcessorID].ProfileStatements),
 	}, nil
+}
+
+func flattenStatements(groups []statementGroup) []string {
+	var out []string
+	for _, g := range groups {
+		out = append(out, g.Statements...)
+	}
+	return out
 }
 
 func componentType(id string) string {
@@ -73,8 +95,12 @@ func componentType(id string) string {
 // checkProfilesPipelineInvariants enforces two properties of the generated profiles pipeline:
 //   - no batch processor: the batch processor has no profiles support, so placing it in this
 //     pipeline makes collector startup fail and takes every other pipeline down with it.
-//   - resource/profiles is in the pipeline and inserts service.name: the backend rejects a
-//     resource without one, so profiles from clients that do not set it would be dropped.
+//   - service.name is always set: the backend rejects a resource without one. The agent sets it
+//     with one of two shapes depending on platform, and either satisfies the invariant:
+//     resource/profiles inserts an inferred name (EC2 with a host tag or instance role, or ECS
+//     from the task family); or, where there is nothing to infer (EC2 with no tag/role, and
+//     Kubernetes, which has no resource/profiles at all), transform/identity carries a
+//     nil-guarded unknown_service fallback so clients that set no name still get one.
 func checkProfilesPipelineInvariants(p profilesPipeline) error {
 	var problems []string
 	hasResource := false
@@ -86,15 +112,34 @@ func checkProfilesPipelineInvariants(p profilesPipeline) error {
 			hasResource = true
 		}
 	}
-	if !hasResource {
-		problems = append(problems, fmt.Sprintf("processor %s is missing from the %s pipeline (processors: %v)", profilesResourceProcessorID, profilesPipelineID, p.Processors))
-	} else if len(serviceNameInserts(p.resourceActions)) == 0 {
-		problems = append(problems, fmt.Sprintf("processor %s has no insert or upsert action for %s", profilesResourceProcessorID, serviceNameKey))
+	resourceInserts := hasResource && len(serviceNameInserts(p.resourceActions)) > 0
+	identityFallback := hasFallbackServiceName(p.identityProfileStatements)
+	if !resourceInserts && !identityFallback {
+		problems = append(problems, fmt.Sprintf(
+			"%s pipeline sets no %s: expected an insert or upsert on %s or a nil-guarded %q statement on %s (processors: %v)",
+			profilesPipelineID, serviceNameKey, profilesResourceProcessorID, fallbackServiceName, profilesIdentityProcessorID, p.Processors))
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// hasFallbackServiceName reports whether any statement sets service.name to the unknown_service
+// fallback under a nil guard, i.e. set(resource.attributes["service.name"], "unknown_service")
+// where resource.attributes["service.name"] == nil. This is the mechanism that owns the final
+// service.name on platforms with no inferred insert, so it must not fire when a name is present.
+func hasFallbackServiceName(statements []string) bool {
+	quotedFallback := fmt.Sprintf("%q", fallbackServiceName)
+	for _, s := range statements {
+		if strings.Contains(s, "set(") &&
+			strings.Contains(s, serviceNameKey) &&
+			strings.Contains(s, quotedFallback) &&
+			strings.Contains(s, "nil") {
+			return true
+		}
+	}
+	return false
 }
 
 // In order; with insert actions the first value wins, because a later insert skips a key that is
