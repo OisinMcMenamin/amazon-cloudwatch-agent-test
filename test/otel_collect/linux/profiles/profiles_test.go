@@ -14,11 +14,8 @@ package profiles
 // The two skipped tests are the integration entry points, which need the agent and an EC2 host.
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -38,12 +35,9 @@ func init() {
 
 const (
 	profilesRuntime    = 3 * time.Minute
-	otlpHTTPEndpoint   = "http://127.0.0.1:4318"
 	otlpHTTPAddr       = "127.0.0.1:4318"
-	profilesURLPath    = "/v1development/profiles"
 	profilesService    = "cwagent-integ-test-profiles"
 	translatedYamlPath = "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.yaml"
-	profilesExporterID = "otlp_http/profiles"
 
 	// exportSettleTime lets the last pushes leave the exporter queue before self telemetry is read.
 	exportSettleTime = 15 * time.Second
@@ -242,19 +236,6 @@ func (t *ProfilesTestRunner) pushOnce() {
 		return
 	}
 	t.metricsAccepted++
-}
-
-func postProfiles(payload []byte) error {
-	resp, err := http.Post(otlpHTTPEndpoint+profilesURLPath, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("POST %s failed: %w", profilesURLPath, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("POST %s returned %d: %s", profilesURLPath, resp.StatusCode, string(body))
-	}
-	return nil
 }
 
 func (t *ProfilesTestRunner) recordFailure(msg string) {
