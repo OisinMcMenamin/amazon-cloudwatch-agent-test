@@ -118,3 +118,43 @@ func TestEncodeProfilesRequestGolden(t *testing.T) {
 	got := encodeProfilesRequest([]resourceAttr{attr(serviceNameKey, "svc-1"), attr("instance_id", "i-0")}, 1700000000000000000)
 	require.True(t, bytes.Equal(want, got), "encoded request drifted from the golden bytes:\nwant %x\ngot  %x", want, got)
 }
+
+func TestEncodeProfilesRequestProfileAttributes(t *testing.T) {
+	oversized := resourceProfile{
+		resource:     []resourceAttr{attr(serviceNameKey, "svc-oversized"), attr("instance_id", "i-0")},
+		profileAttrs: []resourceAttr{attr("integ.test.attr.000", "x"), attr("integ.test.attr.001", "y")},
+	}
+	valid := resourceProfile{resource: []resourceAttr{attr(serviceNameKey, "svc"), attr("instance_id", "i-0")}}
+	req := encodeProfilesRequestWithAttrs([]resourceProfile{valid, oversized}, 1700000000000000000)
+
+	resources := protoValues(t, req, 1)
+	require.Len(t, resources, 2)
+	require.Empty(t, protoValues(t, protoValue(t, resources[0], 2, 2), 11), "the valid profile carries no attribute_indices")
+	require.Len(t, protoValues(t, protoValue(t, resources[1], 1), 1), 2, "over-cap attributes must not sit on the resource")
+
+	packed := protoValue(t, resources[1], 2, 2, 11)
+	var indices []uint64
+	for len(packed) > 0 {
+		v, n := protowire.ConsumeVarint(packed)
+		require.Greater(t, n, 0)
+		indices = append(indices, v)
+		packed = packed[n:]
+	}
+	require.Equal(t, []uint64{1, 2}, indices)
+
+	dict := protoValue(t, req, 2)
+	var stringTable []string
+	for _, s := range protoValues(t, dict, 5) {
+		stringTable = append(stringTable, string(s))
+	}
+	require.Equal(t, append(append([]string(nil), payloadStringTable...), "integ.test.attr.000", "integ.test.attr.001"), stringTable)
+
+	table := protoValues(t, dict, 6)
+	require.Len(t, table, 3)
+	require.Empty(t, table[0], "attribute_table[0] must be the empty entry")
+	for i, want := range []struct{ key, value string }{{"integ.test.attr.000", "x"}, {"integ.test.attr.001", "y"}} {
+		keyIndex, _ := protowire.ConsumeVarint(protoValue(t, table[i+1], 1))
+		require.Equal(t, want.key, stringTable[keyIndex])
+		require.Equal(t, want.value, string(protoValue(t, table[i+1], 2, 1)))
+	}
+}

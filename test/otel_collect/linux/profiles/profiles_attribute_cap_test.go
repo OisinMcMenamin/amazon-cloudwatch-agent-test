@@ -163,12 +163,12 @@ func (t *ProfilesAttributeCapTestRunner) readCounters() (exporterCounts, error) 
 }
 
 func buildAttributeCapPayload(serviceName, instanceID string, extra int) []byte {
-	valid := []resourceAttr{attr(serviceNameKey, serviceName), attr("instance_id", instanceID)}
-	oversized := []resourceAttr{attr(serviceNameKey, serviceName+"-oversized"), attr("instance_id", instanceID)}
+	valid := resourceProfile{resource: []resourceAttr{attr(serviceNameKey, serviceName), attr("instance_id", instanceID)}}
+	oversized := resourceProfile{resource: []resourceAttr{attr(serviceNameKey, serviceName+"-oversized"), attr("instance_id", instanceID)}}
 	for i := 0; i < extra; i++ {
-		oversized = append(oversized, attr(fmt.Sprintf("integ.test.attr.%03d", i), "x"))
+		oversized.profileAttrs = append(oversized.profileAttrs, attr(fmt.Sprintf("integ.test.attr.%03d", i), "x"))
 	}
-	return buildResourceProfilesPayload(valid, oversized)
+	return buildResourceProfilesPayloadWithAttrs(valid, oversized)
 }
 
 func readAgentProcess() (agentProcess, error) {
@@ -220,7 +220,7 @@ func (t *ProfilesAttributeCapTestRunner) capChecks() []capCheck {
 		{t.checkMixedAccepted(), levelMust},
 		{t.checkAgentStaysUp(), levelMust},
 		{t.checkSubsequentDelivery(), levelMust},
-		{checkPartialSuccessSurfaced(logLines, logErr), levelShould},
+		{t.checkDeliveredTruncated(logLines, logErr), levelMust},
 	}
 	if t.countersErr == nil && t.done {
 		log.Printf("[ProfilesCap] counters sent/failed: baseline %.0f/%.0f, after mixed %.0f/%.0f, final %.0f/%.0f",
@@ -284,29 +284,42 @@ func (t *ProfilesAttributeCapTestRunner) checkSubsequentDelivery() status.TestRe
 	return r
 }
 
-func checkPartialSuccessSurfaced(lines []string, logErr error) status.TestResult {
-	r := status.TestResult{Name: "ProfilesCap_PartialSuccessSurfaced", Status: status.FAILED}
+func (t *ProfilesAttributeCapTestRunner) checkDeliveredTruncated(lines []string, logErr error) status.TestResult {
+	r := status.TestResult{Name: "ProfilesCap_DeliveredTruncated", Status: status.FAILED}
 	if logErr != nil {
 		r.Reason = logErr
 		return r
 	}
-	var exportFailures []string
+	var trimmed, partial, exportFailures []string
 	for _, line := range lines {
-		if strings.Contains(line, partialSuccessLogText) {
-			log.Printf("[ProfilesCap] partial success line: %s", line)
-			r.Status = status.SUCCESSFUL
-			return r
-		}
-		if strings.Contains(strings.ToLower(line), exportFailedLogText) {
+		switch {
+		case strings.Contains(line, attributeTrimLogText):
+			trimmed = append(trimmed, line)
+		case strings.Contains(line, partialSuccessLogText):
+			partial = append(partial, line)
+		case strings.Contains(strings.ToLower(line), exportFailedLogText):
 			exportFailures = append(exportFailures, line)
 		}
 	}
-	if len(exportFailures) > 0 {
-		r.Reason = fmt.Errorf("no %q line; the export failed before the backend could apply the attribute limit:\n%s",
-			partialSuccessLogText, strings.Join(exportFailures, "\n"))
-		return r
+	switch {
+	case len(partial) > 0:
+		r.Reason = fmt.Errorf("the backend rejected part of the request; the agent should have trimmed the oversized profile before export:\n%s", strings.Join(partial, "\n"))
+	case len(exportFailures) > 0:
+		r.Reason = fmt.Errorf("the export failed after the oversized push:\n%s", strings.Join(exportFailures, "\n"))
+	case len(trimmed) == 0:
+		r.Reason = fmt.Errorf("no %q line: the agent did not trim the oversized profile", attributeTrimLogText)
+	case !t.done:
+		r.Reason = fmt.Errorf("push sequence did not finish before the agent stopped")
+	case t.countersErr != nil:
+		r.Reason = fmt.Errorf("reading exporter self telemetry: %w", t.countersErr)
+	case t.final.sendFailed > 0:
+		r.Reason = fmt.Errorf("%s reported %.0f profile samples that failed to send (sent %.0f)", profilesExporterID, t.final.sendFailed, t.final.sent)
+	case t.final.sent <= t.baseline.sent:
+		r.Reason = fmt.Errorf("sent counter did not rise after the oversized push (%.0f -> %.0f)", t.baseline.sent, t.final.sent)
+	default:
+		log.Printf("[ProfilesCap] trim line: %s", trimmed[0])
+		r.Status = status.SUCCESSFUL
 	}
-	r.Reason = fmt.Errorf("no %q line and no export failure: the backend's rejection of the oversized profile is not visible in the agent log", partialSuccessLogText)
 	return r
 }
 

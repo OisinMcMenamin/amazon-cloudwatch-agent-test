@@ -36,13 +36,38 @@ func buildProfilesProto(serviceName, instanceID string) []byte {
 }
 
 func encodeProfilesRequest(attrs []resourceAttr, ts uint64) []byte {
+	return encodeProfilesRequestWithAttrs([]resourceProfile{{resource: attrs}}, ts)
+}
+
+func encodeProfilesRequestWithAttrs(resources []resourceProfile, ts uint64) []byte {
+	stringTable := append([]string(nil), payloadStringTable...)
+	var attributeTable [][]byte
 	var req []byte
-	req = appendMessage(req, 1, encodeResourceProfiles(attrs, ts))
-	req = appendMessage(req, 2, encodeDictionary())
+	for _, rp := range resources {
+		var indices []uint64
+		if len(rp.profileAttrs) > 0 {
+			if len(attributeTable) == 0 {
+				attributeTable = append(attributeTable, nil)
+			}
+			for _, a := range rp.profileAttrs {
+				stringTable = append(stringTable, a.Key)
+				var anyValue []byte
+				anyValue = appendString(anyValue, 1, a.Value.StringValue)
+				var kvu []byte
+				kvu = appendVarint(kvu, 1, uint64(len(stringTable))-1)
+				kvu = appendMessage(kvu, 2, anyValue)
+				attributeTable = append(attributeTable, kvu)
+				indices = append(indices, uint64(len(attributeTable))-1)
+			}
+		}
+		req = appendMessage(req, 1, encodeResourceProfiles(rp.resource, indices, ts))
+		ts++
+	}
+	req = appendMessage(req, 2, encodeDictionary(stringTable, attributeTable))
 	return req
 }
 
-func encodeResourceProfiles(attrs []resourceAttr, ts uint64) []byte {
+func encodeResourceProfiles(attrs []resourceAttr, attributeIndices []uint64, ts uint64) []byte {
 	var resource []byte
 	for _, a := range attrs {
 		var anyValue []byte
@@ -71,6 +96,13 @@ func encodeResourceProfiles(attrs []resourceAttr, ts uint64) []byte {
 	profile = appendMessage(profile, 5, encodeValueType(3, 4))
 	profile = appendVarint(profile, 6, uint64(10*time.Millisecond))
 	profile = appendMessage(profile, 7, profileIDBytes(ts))
+	if len(attributeIndices) > 0 {
+		var packed []byte
+		for _, idx := range attributeIndices {
+			packed = protowire.AppendVarint(packed, idx)
+		}
+		profile = appendMessage(profile, 11, packed)
+	}
 
 	var scopeProfiles []byte
 	scopeProfiles = appendMessage(scopeProfiles, 1, scope)
@@ -88,7 +120,7 @@ func encodeValueType(typeIndex, unitIndex uint64) []byte {
 	return appendVarint(vt, 2, unitIndex)
 }
 
-func encodeDictionary() []byte {
+func encodeDictionary(stringTable []string, attributeTable [][]byte) []byte {
 	location := func(address, functionIndex, line uint64) []byte {
 		var l []byte
 		l = appendVarint(l, 1, functionIndex)
@@ -115,8 +147,11 @@ func encodeDictionary() []byte {
 	d = appendMessage(d, 3, function(5, 7))
 	d = appendMessage(d, 3, function(6, 7))
 	d = appendMessage(d, 4, nil)
-	for _, s := range payloadStringTable {
+	for _, s := range stringTable {
 		d = appendString(d, 5, s)
+	}
+	for _, kvu := range attributeTable {
+		d = appendMessage(d, 6, kvu)
 	}
 	d = appendMessage(d, 7, nil)
 	d = appendMessage(d, 7, appendMessage(nil, 1, locationIndices))
