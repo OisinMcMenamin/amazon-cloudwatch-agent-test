@@ -17,6 +17,7 @@ const (
 	exportDroppingLogText  = "Dropping data"
 	exportRejectingLogText = "Rejecting"
 	partialSuccessLogText  = "Partial success response"
+	attributeTrimLogText   = "dropped attributes to meet limit"
 	componentIDLogKey      = "otelcol.component.id"
 )
 
